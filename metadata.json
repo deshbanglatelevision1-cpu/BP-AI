@@ -1,0 +1,5 @@
+{
+  "name": "Bangladesh Premium OS",
+  "description": "A revolutionary AI-powered operating system with advanced automation, deep security, and a premium Bangladeshi-centric digital ecosystem.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"]
+}

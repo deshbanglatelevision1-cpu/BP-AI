@@ -1,0 +1,146 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    function uidUnchanged(field) {
+      return !(field in request.resource.data) || request.resource.data[field] == request.auth.uid;
+    }
+    function uidNotModified(field) {
+      return !(field in request.resource.data) || request.resource.data[field] == resource.data[field];
+    }
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    function isValidString(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() >= minLen &&
+              request.resource.data[field].size() <= maxLen);
+    }
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // Domain Validators
+    function isValidUser() {
+      return hasRequiredFields(['uid', 'email', 'createdAt']) &&
+             request.resource.data.uid == request.auth.uid &&
+             isValidEmail(request.resource.data.email) &&
+             request.resource.data.createdAt is string &&
+             isValidOptionalString('displayName', 0, 100) &&
+             isValidOptionalString('photoURL', 0, 2000) &&
+             isValidOptionalString('phone', 0, 50) &&
+             isValidOptionalString('address', 0, 500) &&
+             isValidOptionalString('preferences', 0, 2000) &&
+             (!( 'updatedAt' in request.resource.data ) || request.resource.data.updatedAt is string);
+    }
+
+    function isValidChat() {
+      return hasRequiredFields(['id', 'userId', 'title', 'createdAt', 'updatedAt']) &&
+             request.resource.data.userId == request.auth.uid &&
+             isValidString('id', 1, 100) &&
+             isValidString('title', 0, 200) &&
+             request.resource.data.createdAt is string &&
+             request.resource.data.updatedAt is string;
+    }
+
+    function isValidMessage() {
+      return hasRequiredFields(['id', 'chatId', 'userId', 'role', 'content', 'createdAt']) &&
+             request.resource.data.userId == request.auth.uid &&
+             isValidString('id', 1, 100) &&
+             isValidString('chatId', 1, 100) &&
+             request.resource.data.role in ['user', 'model', 'system'] &&
+             isValidString('content', 0, 1048576) &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidDocument() {
+      return hasRequiredFields(['id', 'userId', 'title', 'type', 'createdAt', 'updatedAt']) &&
+             request.resource.data.userId == request.auth.uid &&
+             isValidString('id', 1, 100) &&
+             isValidString('title', 1, 200) &&
+             request.resource.data.type in ['word', 'excel', 'ppt', 'photoshop', 'automation'] &&
+             isValidOptionalString('content', 0, 1048576) &&
+             request.resource.data.createdAt is string &&
+             request.resource.data.updatedAt is string;
+    }
+
+    function isValidSearchHistory() {
+      return hasRequiredFields(['userId', 'query', 'timestamp']) &&
+             request.resource.data.userId == request.auth.uid &&
+             isValidString('query', 1, 1000) &&
+             request.resource.data.timestamp is timestamp &&
+             (!( 'results' in request.resource.data ) || request.resource.data.results is list);
+    }
+    
+    function isValidAutomation() {
+      return hasRequiredFields(['userId', 'name', 'trigger', 'action', 'status', 'createdAt']) &&
+             request.resource.data.userId == request.auth.uid &&
+             isValidString('name', 1, 200) &&
+             isValidString('trigger', 1, 200) &&
+             isValidString('action', 1, 200) &&
+             request.resource.data.status in ['active', 'inactive'] &&
+             request.resource.data.createdAt is string;
+    }
+
+    match /test/connection {
+      allow read: if true;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser() && uidUnchanged('uid');
+      allow update: if isOwner(userId) && isValidUser() && uidNotModified('uid') && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(userId);
+    }
+
+    match /chats/{chatId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidChat() && uidUnchanged('userId');
+      allow update: if isDocOwner() && isValidChat() && uidNotModified('userId') && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isDocOwner();
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+        allow create: if isAuthenticated() && isValidMessage() && uidUnchanged('userId') && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+        allow update: if isAuthenticated() && isValidMessage() && uidNotModified('userId') && request.resource.data.createdAt == resource.data.createdAt && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+        allow delete: if isAuthenticated() && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+      }
+    }
+
+    match /documents/{documentId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidDocument() && uidUnchanged('userId');
+      allow update: if isDocOwner() && isValidDocument() && uidNotModified('userId') && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isDocOwner();
+    }
+
+    match /search_history/{historyId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidSearchHistory() && uidUnchanged('userId');
+      allow update: if isDocOwner() && isValidSearchHistory() && uidNotModified('userId') && request.resource.data.timestamp == resource.data.timestamp;
+      allow delete: if isDocOwner();
+    }
+
+    match /automation/{automationId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidAutomation() && uidUnchanged('userId');
+      allow update: if isDocOwner() && isValidAutomation() && uidNotModified('userId') && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isDocOwner();
+    }
+  }
+}
